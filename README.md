@@ -1,18 +1,15 @@
 # skill-deepseek-vision
 
-这个skill通过免费的智谱glm4.6v-flash，让deepseek能够识别图片
+通过 **豆包网页版** 免费识图：复用 Chrome 登录态，用 CDP 自动化操作豆包上传图片并取回文字描述。让没有视觉能力的 AI 获得"外置眼睛"。
 
-通过智谱 **GLM-4.6V-Flash** 免费 API 实现图片识别（识图 / OCR / 图表分析 / 视频·文件理解），秒级返回文字描述。
-
-> 模型官方标注为**完全免费**，不限 token 量（仅限并发速率）。适合个人高频使用，无风控风险，无需浏览器自动化。
+> 本质是白嫖豆包网页版的视觉算力。适合个人低频使用；批量调用有触发风控（验证码/限流）的风险。
 
 ## 特性
 
-- ⚡ 秒级返回（非流式，约 2~10s）
-- 🆓 免费：`glm-4.6v-flash` 官方免费模型
-- 🖼️ 支持 png / jpg / jpeg / webp / gif / bmp
-- 🧠 可开关思考模式（`--thinking`，复杂推理更深入）
-- 🔒 API key 独立存放，不写入代码
+- 🆓 免费：复用你已登录的豆包账号，无 API 费用
+- 🖼️ 支持 png / jpg / jpeg / webp 等（豆包上传支持格式）
+- 🔐 复用 Chrome 登录态，不需要账号密码
+- 🤖 全自动：上传 → 提问 → 等待生成 → 提取结果
 
 ## 目录结构
 
@@ -21,36 +18,50 @@ skill-deepseek-vision/
 ├── SKILL.md                # 技能 playbook（Reasonix/Claude 等 Agent 使用）
 ├── README.md               # 本文件
 └── scripts/
-    └── glm_vision.py       # 识图 CLI（纯标准库，无第三方依赖）
+    ├── cdp_eval.mjs        # Node WebSocket 直连 CDP 取页面内容
+    └── cdp_key.mjs         # CDP 原生键盘事件（发送消息用）
 ```
 
-## 安装与配置
+## 依赖
 
-1. 注册 [智谱开放平台](https://bigmodel.cn)（手机号 + 实名认证），在控制台创建 API Key
-2. 配置 Key（二选一）：
-   - 环境变量：`export ZHIPU_API_KEY="你的key"`
-   - 或写入用户目录：`echo "你的key" > ~/.zhipu_api_key`
+- Windows / macOS / Linux + Google Chrome
+- Node.js 22+（内置 WebSocket）
+- `agent-browser`：`npm install -g agent-browser`
 
-## 用法
+## 配置
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| CDP 端口 | `9223` | 被占用就换 9224+ |
+| debug profile | `~/chrome-debug-profile` | 登录态存放处；首次需在浏览器窗口手动登录豆包 |
+
+启动 CDP 浏览器：
 
 ```bash
-# 基本识图（默认提示词：详细描述图片内容）
-python scripts/glm_vision.py <图片路径>
-
-# 自定义提示词
-python scripts/glm_vision.py <图片路径> "请逐字读出图片中的所有文字"
-
-# 开启思考模式
-python scripts/glm_vision.py <图片路径> "这张图的几何证明过程是什么" --thinking
+rm -f ~/chrome-debug-profile/SingletonLock ~/chrome-debug-profile/SingletonCookie ~/chrome-debug-profile/SingletonSocket
+"/c/Program Files/Google/Chrome/Application/chrome.exe" --remote-debugging-port=9223 \
+  --user-data-dir="C:\Users\24856\chrome-debug-profile" \
+  --no-first-run --no-default-browser-check --no-sandbox &
 ```
 
-作为 Agent skill 使用时，直接说"识图 xxx.png"即可自动调用。
+打开豆包并确认登录：`https://www.doubao.com/chat/`（登录标志：无"登录"按钮、cookie 含 `passport_csrf_token`）。
+
+## 用法（Agent skill 模式）
+
+直接对 Agent 说"识图 xxx.png"即可自动执行：
+
+1. 打开豆包页面 → 校验登录态
+2. 隐藏 `input[type=file]` + `agent-browser upload` 上传图片
+3. 输入提示词（type 到 `textarea.semi-input-textarea`）
+4. CDP 原生 Enter 发送（`agent-browser press` 字段不全，豆包不认）
+5. Node WebSocket 直连取回 AI 回复
 
 ## 注意事项
 
-- ⚠️ **API Key 是敏感信息**：不要提交到 Git，建议用环境变量或 `~/.zhipu_api_key`
-- 免费模型有限并发（错误码 `1302`），个人使用远达不到上限；遇到 `1305` 是平台过载，稍后重试
-- 模型不支持同一次请求混合传入文件 + 视频 + 图片（单次单类型）
+- ⚠️ **低频使用**：网页版自动化有风控风险，不要批量高频调用
+- agent-browser 会报假超时（`WaitDelay expired`），以 `✓ Done` 和实际输出为准
+- 识图结果是有损描述：像素级细节、小字、图表刻度可能失真
+- 登录态过期：在 CDP Chrome 窗口手动重新登录豆包即可
 
 ## License
 

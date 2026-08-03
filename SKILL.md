@@ -1,78 +1,187 @@
 ---
-name: glm-vision
-description: 通过智谱 GLM-4.6V-Flash 免费 API 识图，秒级返回文字描述。触发词：识图、看图、GLM 识图、智谱识图、前端检查、UI 验证、页面效果检查、截图检查、视觉检查。
+name: doubao-vision
+description: 通过 Chrome CDP 调用豆包网页版识图，把本地图片转成文字描述返回。触发词：识图、看图、图片识别、豆包识图。需配合 browser-cdp 复用登录态。
 ---
 
-# GLM 识图（GLM-4.6V-Flash API）
+# 豆包识图（Doubao Vision via Browser）
 
-通过智谱 GLM-4.6V-Flash 免费 API 识别图片，秒级返回文字描述。主会话拿到文字后再做后续推理。
+通过复用 Chrome 登录态打开豆包网页版，上传图片并让豆包描述，把返回文字交给主会话。主会话拿到文字后再做后续推理。
 
-## 配置
+## 配置（按需修改）
 
-- **API key**：读取顺序 ① 环境变量 `ZHIPU_API_KEY` ② 文件 `~/.zhipu_api_key`（第一行）。**key 是敏感信息：禁止写进 skill、禁止打印、禁止提交 GitHub**。
-- 模型：`glm-4.6v-flash`（免费，官方标注"完全免费"，不限量但限并发，个人使用远达不到上限）
-- 端点：`https://open.bigmodel.cn/api/paas/v4/chat/completions`
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| CDP 端口 | `9223` | 被占用就换 9224+，全文同步替换 |
+| 浏览器路径 | `C:\Program Files\Google\Chrome\Application\chrome.exe` | 没装 Chrome 可换 `msedge.exe` |
+| debug profile | `~/chrome-debug-profile` | 存放登录态；首次使用需从已登录的 Chrome 复制登录态，或启动后在浏览器窗口手动登录豆包 |
+| 配套脚本 | `scripts/cdp_eval.mjs`、`scripts/cdp_key.mjs` | 从本目录复制到可执行位置（或直接用 `{SKILL_DIR}/scripts/...` 全路径） |
+
+> 本 skill 是**白嫖豆包网页版视觉能力的自动化通道**：低频个人使用没问题；批量调用有触发风控（验证码/限流）的风险，量大建议改用官方视觉 API。
 
 ## 0. 入口检查
 
-- 确认图片路径存在；不存在就先向用户要正确路径。
+- 确认图片路径存在（`ls` 或文件检查），不存在就先向用户要正确路径。
 - 本 skill 只负责"识图拿文字"，不负责基于文字的后续推理。
-- 支持 png/jpg/jpeg/webp/gif/bmp；单图单次调用（模型不支持同一次请求混合传文件/视频/图像）。
+- **敏感信息**：全流程涉及浏览器登录态，不要在任何输出中打印 Cookie 原文。
 
-## 1. 调用
+## 1. 前置检查 A：电脑是否有 Chrome
+
+在 Windows 常见安装路径中查找 chrome.exe：
 
 ```bash
-python {SKILL_DIR}/scripts/glm_vision.py <图片绝对路径> ["自定义提示词"] [--thinking]
+for p in "/c/Program Files/Google/Chrome/Application/chrome.exe" \
+         "/c/Program Files (x86)/Google/Chrome/Application/chrome.exe" \
+         "$LOCALAPPDATA/Google/Chrome/Application/chrome.exe"; do
+  [ -f "$p" ] && echo "FOUND: $p"
+done
 ```
 
-- 不带提示词 → 默认："请详细描述这张图片的全部内容，包括所有文字、物体、布局、颜色和细节。"
-- 需要精确文字 → "请逐字读出图片中的所有文字。"
-- 需要表格/图表数据 → "请把图中的表格/图表数据逐项列出。"
-- 水印遮挡/模糊图片 → 模型抗干扰能力强（穿透红章、斜水印），直接问即可。
-- `--thinking` → 开启思考模式（更深但更慢），复杂推理题才需要。
+- 找到 → 记下路径，继续第 2 步。
+- **没找到** → 用 ask 工具问用户怎么办：
+  - 选项 1：让用户先安装 Chrome（推荐，最稳）；
+  - 选项 2：改用 Edge（Chromium 内核，同样支持 CDP）：`"/c/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"`，后续所有 `chrome.exe` 换成 `msedge.exe`；
+  - 选项 3：用户指定其他浏览器路径。
 
-## 2. 处理结果
+## 2. 前置检查 B：豆包登录状态确认
 
-- stdout 直接输出模型回复文本，**原样返回给主会话**，注明来源"GLM-4.6V-Flash（智谱免费 API）"。
-- 返回时间：秒级（非流式，通常 2~10s）。
+**用 ask 工具主动问用户："你已经在（常规）Chrome 里登录过豆包吗？"** 选项：
+- 「已登录」→ 继续（登录态通过 chrome-debug-profile 复用，见第 3 步）。
+- 「没登录 / 不确定」→ 先走第 3 步把 CDP 浏览器启动起来，然后**提示用户在弹出的 Chrome 窗口里手动登录豆包**，等用户确认登录完成后再继续识图。
+- 用户提供账号密码要求自动登录 → 说明风险（密码会经浏览器输入），推荐扫码/手动登录。
 
-## 3. 常见问题
+启动后仍要做自动验证（第 4 步），以页面实际状态为准，不盲信用户回答。
 
-| 现象 | 处理 |
-|------|------|
-| `ERROR: 未找到 API key` | 检查 `~/.zhipu_api_key` 或环境变量 |
-| `HTTP_ERROR 401` | key 无效/过期，让用户去 bigmodel.cn 重新生成 |
-| `HTTP_ERROR 1302` | 触发速率限制（并发超限），稍等几秒重试 |
-| `HTTP_ERROR 1305` | 平台过载，等 10~30s 重试 |
-| `HTTP_ERROR 400` | 图片格式/大小问题，转格式或压缩后重试 |
-| 图片过大超时 | 先压缩（如 Pillow 缩到 <5MB）再调用 |
+## 3. 启动 / 复用 CDP 浏览器（依赖 browser-cdp）
 
-## 4. 前端 / UI 验证模式（视觉检查）
+先 `read_skill browser-cdp` 获取 `SKILL_DIR`。**2026-08-03 实测：setup 脚本可能启动失败**（探测报 `CHROME_RUNNING=no`、`--yes` 后报成功，但 CDP 端口上实际是别的 404 服务；且脚本内部会 `taskkill` 用户 Chrome）。优先手动启动，最稳、绝不误杀：
 
-**适用场景**：主会话完成前端代码（HTML/CSS/JS、React/Vue 页面等）后，需要验证渲染效果是否符合预期。本模式让无视觉的主会话通过识图获得"眼睛"。
-
-### 流程
-
-1. **渲染页面并截图**（任选环境可用方式）：
-   - 本地静态页面：起本地服务或直接 `file://` 打开，用浏览器自动化工具截图（如 `agent-browser` 的 screenshot、CDP `Page.captureScreenshot`、web-access 的 cdp-proxy `/screenshot`）；
-   - 已有线上 URL：直接打开截图。
-   - 截图存为 png/jpg，记录保存路径。
-2. **调用识图检查**：
+1. 探测：`node {SKILL_DIR}/scripts/setup-cdp-chrome.js 9223 --detect-only`
+   - `CDP_STATUS=ready` → 直接用 `agent-browser --cdp 9223`（端口保持一致）
+   - 否则手动启动（**不杀任何进程**，后台运行）：
+     ```bash
+     rm -f ~/chrome-debug-profile/SingletonLock ~/chrome-debug-profile/SingletonCookie ~/chrome-debug-profile/SingletonSocket
+     "/c/Program Files/Google/Chrome/Application/chrome.exe" --remote-debugging-port=9223 \
+       --user-data-dir="C:\Users\24856\chrome-debug-profile" \
+       --no-first-run --no-default-browser-check --disable-background-networking --no-sandbox &
+     sleep 6
+     ```
+   - 验证 CDP 存活：
+     ```bash
+     node -e "fetch('http://127.0.0.1:9223/json/version').then(r=>r.json()).then(v=>console.log('OK',v.Browser))"
+     ```
+2. 打开豆包：
    ```bash
-   python {SKILL_DIR}/scripts/glm_vision.py <截图路径> "这是前端页面截图。请逐项检查并报告：1) 整体布局是否正常、有无元素重叠或错位；2) 文字是否清晰、有无乱码、截断、溢出；3) 颜色/字体/间距是否符合设计预期；4) 图片、图标、按钮是否正常显示；5) 其他明显的视觉问题。"
+   agent-browser --cdp 9223 open "https://www.doubao.com/chat/"
    ```
-3. **逐项核对**：按回复内容对照预期（设计稿/需求），列出问题清单。
-4. **修改并复查**：修复问题后重新截图 → 再识图，直到无明显问题（最多复查 2~3 轮）。
-5. **精确布局补充**：识图是"描述性判断"，像素级问题（间距差 2px、颜色色值偏差）不可靠——配合 DOM 计算（`getBoundingClientRect`、getComputedStyle）和浏览器 console 报错检查。
+3. ⚠️ **agent-browser 每步都可能报 `WaitDelay expired` / `Operation timed out`，但实际已成功**——以输出里的 `✓ Done` 和实际返回为准，看到 error 不要重试或放弃。`snapshot -i` 在豆包页面会卡死，一律用 eval 探测 DOM。
 
-### 注意事项
+## 4. 校验登录态（自动）
 
-- 截图分辨率影响识图效果：小字/细节放大后再截或裁切局部识图。
-- 深色模式、hover 态等动态效果需分别截图检查。
-- 涉及精确数值（色值、尺寸）时向用户说明"视觉描述仅供参考，精确值以代码为准"。
+```bash
+agent-browser --cdp 9223 eval 'location.href'
+```
 
-## 5. 边界说明
+- 页面加载中间态可能出现"登录"按钮——**等待 5~10s 后复查**（豆包会从登录页自动跳转 `?from_login=1`）。
+- 最终 URL 仍停在 `login` / `passport` → 登录态失效：提示用户在弹出的 CDP Chrome 窗口手动登录，用户确认后再继续。
+- 已登录标志：无"登录"按钮、cookie 含 `passport_csrf_token`、URL 带 `from_login=1`。
 
-- 免费模型是 9B 小模型：日常识图、OCR、图表足够；极端复杂的视觉推理可开 `--thinking` 或换付费模型。
-- 批量识图：逐张串行调用即可（注意限并发，避免同时发起大量请求）。
-- 本 skill 是免费 API 方案；若智谱 key 失效且暂时无法获取，可临时用其他免费视觉 API 或网页版方案替代。
+## 5. 上传图片并识图
+
+1. 探测上传控件（豆包是**隐藏的 `input[type=file]`**，accept 含 png/jpg/webp）：
+   ```bash
+   agent-browser --cdp 9223 eval '[...document.querySelectorAll("input[type=file]")].map(e=>e.accept).join(",")'
+   ```
+2. 上传（实测直接可用，无需 DOM.setFileInputFiles）：
+   ```bash
+   agent-browser --cdp 9223 upload "input[type=file]" "<图片绝对路径，正斜杠>"
+   ```
+3. 确认上传成功：页面出现 `blob:` URL 的 img 预览、`hasPreview=true`（eval 检查 `[class*="upload-list"],[class*="file-card"],[class*="attachment"]` 等）。
+4. 输入提示词：
+   ```bash
+   agent-browser --cdp 9223 type "textarea.semi-input-textarea" "请详细描述这张图片的全部内容，包括所有文字、物体、布局、颜色和细节。"
+   ```
+   - ⚠️ **type 会报假超时但实际成功**，用 `node {SKILL_DIR}/scripts/cdp_eval.mjs 9223 "doubao.com" '...value.length'` 验证输入框非空。
+   - 需要精确文字时改为："请逐字读出图片中的所有文字。"
+   - 需要表格/图表数据时改为："请把图中的表格/图表数据逐项列出。"
+5. **发送（不能用 `press "Enter"`，2026-08-03 实测无效，豆包受控输入框不认字段不全的键盘事件）**，用 CDP 原生按键脚本：
+   ```javascript
+   // {SKILL_DIR}/scripts/cdp_key.mjs  用法: node cdp_key.mjs <port> <url过滤> Enter
+   const [port, urlFilter, key] = [process.argv[2], process.argv[3], process.argv[4]];
+   const list = await fetch(`http://127.0.0.1:${port}/json`).then(r => r.json());
+   const page = list.filter(t => t.type === 'page' && t.url.includes(urlFilter))[0];
+   if (!page) { console.log('NO_PAGE'); process.exit(1); }
+   const ws = new WebSocket(page.webSocketDebuggerUrl);
+   let id = 0; const pending = {};
+   const send = (method, params = {}) => new Promise((res) => {
+     const mid = ++id; pending[mid] = res;
+     ws.send(JSON.stringify({ id: mid, method, params }));
+   });
+   ws.onmessage = e => { const m = JSON.parse(e.data); if (m.id && pending[m.id]) { pending[m.id](m); delete pending[m.id]; } };
+   await new Promise(r => ws.onopen = r);
+   await send('Runtime.evaluate', { expression: `document.querySelector('textarea.semi-input-textarea').focus()` });
+   await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13, text: '\r', unmodifiedText: '\r' });
+   await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
+   console.log('KEY_SENT'); ws.close(); process.exit(0);
+   ```
+   ```bash
+   node {SKILL_DIR}/scripts/cdp_key.mjs 9223 "doubao.com" "Enter"
+   ```
+   - 发送成功标志：输入框 value 变空（`vlen: 0`）。
+6. 等待回复生成（生成期间页面网络活跃，agent-browser 会一直超时——**改用 Node WebSocket 直连取结果**，见第 6 步）。
+
+## 6. 提取结果（Node WebSocket 直连 CDP）
+
+```javascript
+// {SKILL_DIR}/scripts/cdp_eval.mjs  用法: node cdp_eval.mjs <port> <url过滤串> '<js表达式>'
+const [port, urlFilter, expr] = [process.argv[2], process.argv[3], process.argv[4]];
+const list = await fetch(`http://127.0.0.1:${port}/json`).then(r => r.json());
+const page = (urlFilter ? list.filter(t => t.type === 'page' && t.url.includes(urlFilter)) : list.filter(t => t.type === 'page'))[0];
+if (!page) { console.log('NO_PAGE'); process.exit(1); }
+const ws = new WebSocket(page.webSocketDebuggerUrl);
+const timer = setTimeout(() => { console.log('WS_TIMEOUT'); process.exit(2); }, 25000);
+ws.onopen = () => ws.send(JSON.stringify({ id: 1, method: 'Runtime.evaluate', params: { expression: expr, returnByValue: true } }));
+ws.onmessage = e => {
+  const m = JSON.parse(e.data);
+  if (m.id === 1) {
+    clearTimeout(timer);
+    const v = m.result && m.result.result;
+    console.log(v ? (typeof v.value === 'string' ? v.value : JSON.stringify(v.value)) : JSON.stringify(m.result));
+    ws.close(); process.exit(0);
+  }
+};
+ws.onerror = () => { clearTimeout(timer); console.log('WS_ERROR'); process.exit(3); };
+```
+
+```bash
+node {SKILL_DIR}/scripts/cdp_eval.mjs 9223 "doubao.com" 'document.body.innerText.slice(-2500)'
+```
+
+- **必须按 URL 过滤**（`doubao.com`），否则会选到 DevTools tab。
+- 截取最后一条 AI 回复，**原样返回给主会话**，注明来源"豆包识图（网页版）"。
+- 豆包回复末尾常带追问建议（"图片中…是什么？"），只取 AI 回复主体即可。
+
+## 7. 登录态失效处理
+
+- 提示用户登录态过期：让用户在 CDP Chrome 窗口（chrome-debug-profile）手动登录豆包后重试。
+- 或从常规 Chrome 复制登录态：`node {SKILL_DIR}/scripts/setup-cdp-chrome.js 9223 --reset --yes`（会杀所有 Chrome，需先征得同意）。
+
+## 8. 常见问题
+
+| 问题 | 处理 |
+|------|------|
+| 没装 Chrome | ask 用户：装 Chrome / 用 Edge（msedge.exe 同样支持 CDP）/ 指定路径 |
+| 9222/9223 端口被占且返回 404 | 不是 CDP 服务；换新端口（9224...）手动启动 |
+| agent-browser 报 WaitDelay 超时 | 忽略，以 `✓ Done` 和输出为准 |
+| `snapshot -i` 卡死 | 不用它，用 eval 探测 DOM |
+| 找不到上传按钮 | eval 找隐藏 `input[type=file]`（豆包就是隐藏的） |
+| 上传后无回复 | eval 确认 blob 预览存在；提示词换简单句重试 |
+| `press Enter` 发不出去 | agent-browser 的 press 字段不全，豆包不认；改用 CDP 原生 `Input.dispatchKeyEvent`（cdp_key.mjs） |
+| type 报超时但实际成功 | 假超时；用 cdp_eval.mjs 验证输入框 value 长度确认 |
+| eval 拿到 DevTools 页内容 | 按 URL 过滤 target（`doubao.com`） |
+| 返回内容截断 | 取 `innerText` 不同区间（slice 大范围 / 分页） |
+| 页面结构变了 | 不要死磕写死的选择器，用 eval 动态探测 |
+
+## 9. 边界说明
+
+- 识图结果是**有损描述**：像素级细节、小字、图表刻度可能失真，涉及精确数据时向用户说明。
+- 批量识图：逐张串行执行本流程；超过 10 张建议提示用户改用视觉 API（如 `doubao-vision`、`qwen-vl`）。
