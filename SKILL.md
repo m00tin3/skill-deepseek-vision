@@ -85,17 +85,21 @@ agent-browser --cdp 9223 eval 'location.href'
 - 最终 URL 仍停在 `login` / `passport` → 登录态失效：提示用户在弹出的 CDP Chrome 窗口手动登录，用户确认后再继续。
 - 已登录标志：无"登录"按钮、cookie 含 `passport_csrf_token`、URL 带 `from_login=1`。
 
-## 4.1 开新对话（每次识图必做）
+## 4.1 会话管理（防风控：一个对话 ↔ 一个豆包会话）
 
-**每次识图必须在全新会话中进行**（2026-08-03 实测）：避免上下文污染（旧图内容影响新图识别）、累积变慢、结果混淆。
+**原则**（用户方案，2026-08-03）：一个 Reasonix 对话只对应一个豆包识图会话——频繁创建新会话是风控的典型信号，复用会话把风险降到最低；上下文污染用提示词隔离（见 §5 提示词模板）。
 
-1. 导航到无会话 id 的 URL 即开启新对话（清空主对话区；历史会话保留在侧栏）：
-   ```bash
-   node {SKILL_DIR}/scripts/cdp_eval.mjs 9223 "doubao.com" 'location.href = "https://www.doubao.com/chat/", "ok"'
-   sleep 6
-   ```
-2. 验证：URL 回到 `https://www.doubao.com/chat/`（无 `/chat/<数字id>`）。
-3. ⚠️ **开新对话后模式重置为"快速"**——所以顺序必须是：先开新对话，再按 §4.2 切模式。
+- **本对话首次识图**：导航 `/chat/` 开一个新会话（仅此一次），记录 URL 中的会话 id：
+  ```bash
+  node {SKILL_DIR}/scripts/cdp_eval.mjs 9223 "doubao.com" 'location.href = "https://www.doubao.com/chat/", "ok"'
+  sleep 6
+  node {SKILL_DIR}/scripts/cdp_eval.mjs 9223 "doubao.com" 'location.href'
+  # → 记录形如 https://www.doubao.com/chat/38436644571127042 的会话 id
+  ```
+  主会话在对话上下文中记住该 id（对话结束即失效，符合"一个对话一个会话"语义）。
+- **后续识图**：不导航、不新建，直接复用当前会话（检查 URL 仍带记录的会话 id）。
+- **异常处理**：若检测到 URL 会话 id 与记录不一致（用户手动切换了会话/页面刷新），导航回记录的会话 id URL；找不到则复用当前会话继续（绝不主动再开新会话）。
+- ⚠️ 开新会话后模式重置为"快速"——首次开会话后按 §4.2 切模式；后续复用会话时模式保持上次选择。
 
 ## 4.2 模式选择（可选，ask 用户）
 
@@ -145,11 +149,12 @@ node {SKILL_DIR}/scripts/cdp_mode.mjs 9223 "doubao.com" "快速"
    console.log('TYPE_SENT'); ws.close(); process.exit(0);
    ```
    ```bash
-   node {SKILL_DIR}/scripts/cdp_type.mjs 9223 "doubao.com" "请详细描述这张图片的全部内容，包括所有文字、物体、布局、颜色和细节。"
+   node {SKILL_DIR}/scripts/cdp_type.mjs 9223 "doubao.com" "请完全忽略本对话中此前的所有内容（包括之前的图片和消息），只根据当前这张图片回答。要求：请详细描述这张图片的全部内容，包括所有文字、物体、布局、颜色和细节。"
    ```
+   - ⚠️ **提示词必须带"忽略历史"前缀**（会话复用的防污染机制）——所有变体都要加。
    - 用 `node {SKILL_DIR}/scripts/cdp_eval.mjs 9223 "doubao.com" '...value.length'` 验证输入框非空（>0 才算成功；为 0 说明输入失败，重试或检查 textarea 选择器）。
-   - 需要精确文字时改为："请逐字读出图片中的所有文字。"
-   - 需要表格/图表数据时改为："请把图中的表格/图表数据逐项列出。"
+   - 需要精确文字时改为（保留前缀）："请完全忽略本对话中此前的所有内容，只根据当前这张图片回答。要求：请逐字读出图片中的所有文字。"
+   - 需要表格/图表数据时改为（保留前缀）："请完全忽略本对话中此前的所有内容，只根据当前这张图片回答。要求：请把图中的表格/图表数据逐项列出。"
 5. **发送（不能用 `press "Enter"`，2026-08-03 实测无效，豆包受控输入框不认字段不全的键盘事件）**，用 CDP 原生按键脚本：
    ```javascript
    // {SKILL_DIR}/scripts/cdp_key.mjs  用法: node cdp_key.mjs <port> <url过滤> Enter
