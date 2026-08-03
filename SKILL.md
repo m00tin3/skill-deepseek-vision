@@ -85,6 +85,23 @@ agent-browser --cdp 9223 eval 'location.href'
 - 最终 URL 仍停在 `login` / `passport` → 登录态失效：提示用户在弹出的 CDP Chrome 窗口手动登录，用户确认后再继续。
 - 已登录标志：无"登录"按钮、cookie 含 `passport_csrf_token`、URL 带 `from_login=1`。
 
+## 4.1 模式选择（可选，ask 用户）
+
+豆包有模式下拉菜单：**快速**（默认，快）/ **专家**（研究级专业问答，更深入但慢）/ 工作任务。
+
+- 识图前用 ask 工具问用户："本次用哪个模式？"（专家模式回答更细致，适合复杂图表/文档；快速模式秒回）
+- 按选择调用（2026-08-03 实测：**必须用 CDP 完整鼠标事件序列** mouseMoved→mousePressed→mouseReleased，JS click() 打不开菜单）：
+
+```bash
+# 切专家模式（输出 AFTER: 专家 即成功）
+node {SKILL_DIR}/scripts/cdp_mode.mjs 9223 "doubao.com" "专家"
+# 切快速模式
+node {SKILL_DIR}/scripts/cdp_mode.mjs 9223 "doubao.com" "快速"
+```
+
+- 菜单项支持：`专家`、`快速`、`工作任务`（Turbo）；验证标准：脚本输出 `AFTER: <目标模式名>`。
+- 模式按钮定位：`[data-valid-btn=mode-select-action-btn]`（输入框内）。
+
 ## 5. 上传图片并识图
 
 1. 探测上传控件（豆包是**隐藏的 `input[type=file]`**，accept 含 png/jpg/webp）：
