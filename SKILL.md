@@ -85,7 +85,19 @@ agent-browser --cdp 9223 eval 'location.href'
 - 最终 URL 仍停在 `login` / `passport` → 登录态失效：提示用户在弹出的 CDP Chrome 窗口手动登录，用户确认后再继续。
 - 已登录标志：无"登录"按钮、cookie 含 `passport_csrf_token`、URL 带 `from_login=1`。
 
-## 4.1 模式选择（可选，ask 用户）
+## 4.1 开新对话（每次识图必做）
+
+**每次识图必须在全新会话中进行**（2026-08-03 实测）：避免上下文污染（旧图内容影响新图识别）、累积变慢、结果混淆。
+
+1. 导航到无会话 id 的 URL 即开启新对话（清空主对话区；历史会话保留在侧栏）：
+   ```bash
+   node {SKILL_DIR}/scripts/cdp_eval.mjs 9223 "doubao.com" 'location.href = "https://www.doubao.com/chat/", "ok"'
+   sleep 6
+   ```
+2. 验证：URL 回到 `https://www.doubao.com/chat/`（无 `/chat/<数字id>`）。
+3. ⚠️ **开新对话后模式重置为"快速"**——所以顺序必须是：先开新对话，再按 §4.2 切模式。
+
+## 4.2 模式选择（可选，ask 用户）
 
 豆包有模式下拉菜单：**快速**（默认，快）/ **专家**（研究级专业问答，更深入但慢）/ 工作任务。
 
