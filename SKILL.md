@@ -96,11 +96,29 @@ agent-browser --cdp 9223 eval 'location.href'
    agent-browser --cdp 9223 upload "input[type=file]" "<图片绝对路径，正斜杠>"
    ```
 3. 确认上传成功：页面出现 `blob:` URL 的 img 预览、`hasPreview=true`（eval 检查 `[class*="upload-list"],[class*="file-card"],[class*="attachment"]` 等）。
-4. 输入提示词：
-   ```bash
-   agent-browser --cdp 9223 type "textarea.semi-input-textarea" "请详细描述这张图片的全部内容，包括所有文字、物体、布局、颜色和细节。"
+4. 输入提示词（**首选 CDP 原生输入**，2026-08-03 实测 agent-browser type 有时真失败）：
+   ```javascript
+   // {SKILL_DIR}/scripts/cdp_type.mjs  用法: node cdp_type.mjs <port> <url过滤> "<文本>"
+   const [port, urlFilter, text] = [process.argv[2], process.argv[3], process.argv[4]];
+   const list = await fetch(`http://127.0.0.1:${port}/json`).then(r => r.json());
+   const page = list.filter(t => t.type === 'page' && t.url.includes(urlFilter))[0];
+   if (!page) { console.log('NO_PAGE'); process.exit(1); }
+   const ws = new WebSocket(page.webSocketDebuggerUrl);
+   let id = 0; const pending = {};
+   const send = (method, params = {}) => new Promise((res) => {
+     const mid = ++id; pending[mid] = res;
+     ws.send(JSON.stringify({ id: mid, method, params }));
+   });
+   ws.onmessage = e => { const m = JSON.parse(e.data); if (m.id && pending[m.id]) { pending[m.id](m); delete pending[m.id]; } };
+   await new Promise(r => ws.onopen = r);
+   await send('Runtime.evaluate', { expression: `document.querySelector('textarea.semi-input-textarea').focus()` });
+   await send('Input.insertText', { text });
+   console.log('TYPE_SENT'); ws.close(); process.exit(0);
    ```
-   - ⚠️ **type 会报假超时但实际成功**，用 `node {SKILL_DIR}/scripts/cdp_eval.mjs 9223 "doubao.com" '...value.length'` 验证输入框非空。
+   ```bash
+   node {SKILL_DIR}/scripts/cdp_type.mjs 9223 "doubao.com" "请详细描述这张图片的全部内容，包括所有文字、物体、布局、颜色和细节。"
+   ```
+   - 用 `node {SKILL_DIR}/scripts/cdp_eval.mjs 9223 "doubao.com" '...value.length'` 验证输入框非空（>0 才算成功；为 0 说明输入失败，重试或检查 textarea 选择器）。
    - 需要精确文字时改为："请逐字读出图片中的所有文字。"
    - 需要表格/图表数据时改为："请把图中的表格/图表数据逐项列出。"
 5. **发送（不能用 `press "Enter"`，2026-08-03 实测无效，豆包受控输入框不认字段不全的键盘事件）**，用 CDP 原生按键脚本：
