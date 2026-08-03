@@ -120,6 +120,19 @@ node {SKILL_DIR}/scripts/cdp_mode.mjs 9223 "doubao.com" "快速"
 
 ## 5. 上传图片并识图
 
+### 首选：一站式脚本（一次调用完成全流程，2026-08-03 实测）
+
+```bash
+node {SKILL_DIR}/scripts/cdp_identify.mjs 9223 "doubao.com" "<图片绝对路径>" ["自定义提示词"] [--mode 快速|专家] [--new-chat]
+```
+
+- 自动完成：挂载上传入口（file input 不存在时自动点"+"）→ `DOM.setFileInputFiles` 上传 → 等上传完成（blob 预览出现 + 6s 缓冲，**防止图没传完就发送**）→ focus + `Input.insertText` 输入 → CDP 原生 Enter 发送 → 轮询回复稳定后输出。
+- `--new-chat`：本对话**首次**识图时用（对应 §4.1）；后续复用会话不要加。
+- `--mode`：切模式（专家/快速），如不加则沿用当前。
+- 输出：`=====REPLY=====` 与 `=====END=====` 之间的内容即 AI 回复；前面 `[1]~[8]` 是进度日志。
+- 失败排查时才用下面的分步流程。
+
+
 1. 探测上传控件（豆包是**隐藏的 `input[type=file]`**，accept 含 png/jpg/webp）：
    ```bash
    agent-browser --cdp 9223 eval '[...document.querySelectorAll("input[type=file]")].map(e=>e.accept).join(",")'
